@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#111" />
+  <link rel="manifest" href="data:application/json,{"name":"KrakenBin Scanner","short_name":"KrakenBin","start_url":".","display":"standalone","background_color":"#111","theme_color":"#111"}" />
+  <title>KrakenBin Scanner</title>
+  <style>
+    body { background:#111; color:#eee; font-family:sans-serif; padding:1rem; }
+    button, input, select { margin:0.25rem; padding:0.4rem; font-size:1rem; }
+    table { width:100%; margin-top:1rem; border-collapse:collapse; font-size:0.9rem; }
+    th, td { padding:0.5rem; text-align:left; border-bottom:1px solid #333; }
+    .up { color: #0f0; } .down { color: #f44; }
+  </style>
+</head>
+<body>
+  <h1>KrakenBin Scanner</h1>
+
+  <div>
+    <label>Threshold (%): <input type="number" id="threshold" value="2" /></label>
+    <button onclick="applyFilters()">Apply Filters</button>
+  </div>
+
+  <div>
+    <button onclick="setType('spot')">Spot Only</button>
+    <button onclick="setType('leveraged')">Leveraged Only</button>
+    <button onclick="setType('both')">Both</button>
+    <button onclick="setTimeframe('1m')">1m</button>
+    <button onclick="setTimeframe('5m')">5m</button>
+    <button onclick="setTimeframe('24h')">24h</button>
+  </div>
+
+  <div>
+    <button onclick="refreshBinance()">Refresh Binance Movers</button>
+    <button onclick="updateKraken()">Update Kraken Lists</button>
+  </div>
+
+  <div id="output"></div>
+
+  <script>
+    let threshold = 2;
+    let mode = 'spot';
+    let timeframe = '1m';
+    let krakenPairs = { spot: [], leveraged: [] };
+
+    async function updateKraken() {
+      const res = await fetch('https://api.kraken.com/0/public/AssetPairs');
+      const data = await res.json();
+      const pairs = Object.values(data.result);
+      krakenPairs.spot = [];
+      krakenPairs.leveraged = [];
+      for (let p of pairs) {
+        const base = p.base;
+        const quote = p.quote;
+        const alt = p.altname;
+        const obj = { altname: alt, base, quote };
+        const isSpot = base.startsWith('X') && quote.startsWith('Z');
+        if (isSpot) krakenPairs.spot.push(obj);
+        else krakenPairs.leveraged.push(obj);
+      }
+      localStorage.setItem('krakenPairs', JSON.stringify(krakenPairs));
+      alert("Kraken data updated.");
+    }
+
+    function loadKraken() {
+      const saved = localStorage.getItem('krakenPairs');
+      if (saved) krakenPairs = JSON.parse(saved);
+    }
+
+    function setType(t) { mode = t; }
+    function setTimeframe(t) { timeframe = t; }
+    function applyFilters() {
+      threshold = parseFloat(document.getElementById('threshold').value);
+      refreshBinance();
+    }
+
+    async function refreshBinance() {
+      const out = document.getElementById('output');
+      out.innerHTML = "<p>Loading Binance data...</p>";
+      const res = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+      const data = await res.json();
+      const usdt = data.filter(d => d.symbol.endsWith("USDT") && !d.symbol.includes("UP") && !d.symbol.includes("DOWN"));
+
+      const filtered = usdt.map(c => {
+        const change = parseFloat(c.priceChangePercent);
+        const symbol = c.symbol.replace("USDT", "/USDT");
+        return { symbol, change, price: parseFloat(c.lastPrice) };
+      }).filter(c => Math.abs(c.change) >= threshold);
+
+      const matchList = (mode === 'spot' ? krakenPairs.spot : mode === 'leveraged' ? krakenPairs.leveraged : [...krakenPairs.spot, ...krakenPairs.leveraged]);
+      const matched = filtered.filter(f => {
+        const base = f.symbol.split("/")[0].toUpperCase();
+        return matchList.some(k => k.base.includes(base));
+      });
+
+      matched.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+
+      let html = `<table><tr><th>Coin</th><th>Price</th><th>% Change</th></tr>`;
+      for (let m of matched) {
+        const dir = m.change > 0 ? 'up' : 'down';
+        html += `<tr><td>${m.symbol}</td><td>${m.price}</td><td class="${dir}">${m.change.toFixed(2)}%</td></tr>`;
+      }
+      html += `</table>`;
+      out.innerHTML = html;
+    }
+
+    loadKraken();
+  </script>
+</body>
+</html>
